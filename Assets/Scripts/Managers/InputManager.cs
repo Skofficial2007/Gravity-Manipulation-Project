@@ -6,80 +6,76 @@ public class InputManager : MonoBehaviour
 {
     private PlayerControls playerControls;
 
-    private PlayerLocomotion playerLocomotion;         // Handles actual physical movement of the player
-    private AnimatorManager animatorManager;           // Responsible for updating Animator parameters
+    private PlayerLocomotion playerLocomotion;
+    private AnimatorManager animatorManager;
 
-    // Caches raw and processed input values each frame.
-    private Vector2 movementInput;                     // Stores directional input for movement (WASD / left stick)
-    private Vector2 cameraInput;                       // Stores camera control input (mouse or right stick)
-    private Vector2 rawGravityInput;                   // Raw input for gravity direction (before snapping)
+    // Input values from the Input System
+    private Vector2 movementInput;
+    private Vector2 cameraInput;
+    private Vector2 rawGravityInput;
 
-    // Used to break down movement and camera inputs into separate axes.
-    private float moveAmount;                          // Combined magnitude of input (used to drive blend tree values)
-    private float verticalInput;                       // Forward/backward movement input
-    private float horizontalInput;                     // Left/right movement input
-    private float cameraInputX;                        // Horizontal look input
-    private float cameraInputY;                        // Vertical look input
+    // Processed input values
+    private float moveAmount;
+    private float verticalInput;
+    private float horizontalInput;
+    private float cameraInputX;
+    private float cameraInputY;
 
-    // Input flags (set through callbacks, used during logic update)
     [SerializeField] private bool sprintInput;
     [SerializeField] private bool jumpInput;
 
-    // Events triggered during gravity shift interactions (previewing or confirming)
+    // Events for gravity preview/confirmation
     public event Action<Vector3> OnGravityConfirmed;
     public event Action<Vector3> OnGravityPreviewed;
     public event Action OnGravityPreviewCanceled;
     public event Action OnGravityPreviewConfirmed;
 
-    // Tracks last preview direction to avoid redundant event calls
     private Vector3 lastPreviewDirection = Vector3.zero;
-
-    // Whether input should be ignored due to game state
     private bool inputBlocked = false;
 
     private void Awake()
     {
+        // Get references to related components
         animatorManager = GetComponentInChildren<AnimatorManager>();
         playerLocomotion = GetComponent<PlayerLocomotion>();
     }
 
-    // Input System setup and event registration
     private void OnEnable()
     {
+        // Set up input actions
         if (playerControls == null)
         {
             playerControls = new PlayerControls();
 
-            // Movement and camera bindings
+            // Movement and camera
             playerControls.PlayerMovement.Movement.performed += Movement_Input_Performed;
             playerControls.PlayerMovement.Camera.performed += Camera_Input_Performed;
 
-            // Sprint and jump inputs
+            // Sprint and jump
             playerControls.PlayerAction.Sprint.performed += Sprint_Input_Performed;
             playerControls.PlayerAction.Sprint.canceled += Sprint_Input_Canceled;
             playerControls.PlayerAction.Jump.performed += Jump_Input_Performed;
 
-            // Gravity selection input
+            // Gravity controls
             playerControls.PlayerAction.Gravity.performed += Gravity_Input_Performed;
             playerControls.PlayerAction.Gravity.canceled += Gravity_Input_Canceled;
             playerControls.PlayerAction.Confirm.performed += Gravity_Confirm_Performed;
 
-            // Pause menu toggle
+            // Pause control
             playerControls.PlayerAction.Pause.performed += Pause_Performed;
         }
 
-        // Enable the input map
         playerControls.Enable();
 
-        // Listen for game state changes to enable/disable input
+        // Listen for game state changes
         GameManager.OnGameStateChanged += HandleGameStateChanged;
     }
 
-    // Unregister all input callbacks and event listeners when disabled
     private void OnDisable()
     {
         playerControls.Disable();
 
+        // Unsubscribe from all input events
         playerControls.PlayerMovement.Movement.performed -= Movement_Input_Performed;
         playerControls.PlayerMovement.Camera.performed -= Camera_Input_Performed;
         playerControls.PlayerAction.Sprint.performed -= Sprint_Input_Performed;
@@ -93,64 +89,51 @@ public class InputManager : MonoBehaviour
         GameManager.OnGameStateChanged -= HandleGameStateChanged;
     }
 
-    // Input callbacks update their respective input flags or vectors
-
-    private void Jump_Input_Performed(InputAction.CallbackContext ctx)
+    private void Start()
     {
-        jumpInput = true;
+        // Force player orientation at start if no input yet
+        if (movementInput == Vector2.zero)
+        {
+            Vector3 camForward = Camera.main.transform.forward;
+            Vector3 flatForward = new Vector3(camForward.x, 0f, camForward.z).normalized;
+            Vector3 localForward = transform.InverseTransformDirection(flatForward);
+
+            movementInput = new Vector2(localForward.x, localForward.z);
+            HandleMovementInput();
+
+            // Clear again to avoid unintended movement
+            movementInput = Vector2.zero;
+        }
     }
 
-    private void Sprint_Input_Performed(InputAction.CallbackContext ctx)
-    {
-        sprintInput = true;
-    }
+    // Input callbacks
+    private void Jump_Input_Performed(InputAction.CallbackContext ctx) => jumpInput = true;
+    private void Sprint_Input_Performed(InputAction.CallbackContext ctx) => sprintInput = true;
+    private void Sprint_Input_Canceled(InputAction.CallbackContext ctx) => sprintInput = false;
+    private void Camera_Input_Performed(InputAction.CallbackContext ctx) => cameraInput = ctx.ReadValue<Vector2>();
+    private void Movement_Input_Performed(InputAction.CallbackContext ctx) => movementInput = ctx.ReadValue<Vector2>();
+    private void Gravity_Input_Performed(InputAction.CallbackContext ctx) => rawGravityInput = ctx.ReadValue<Vector2>();
+    private void Gravity_Input_Canceled(InputAction.CallbackContext ctx) => rawGravityInput = Vector2.zero;
 
-    private void Sprint_Input_Canceled(InputAction.CallbackContext ctx)
-    {
-        sprintInput = false;
-    }
-
-    private void Camera_Input_Performed(InputAction.CallbackContext ctx)
-    {
-        cameraInput = ctx.ReadValue<Vector2>();
-    }
-
-    private void Movement_Input_Performed(InputAction.CallbackContext ctx)
-    {
-        movementInput = ctx.ReadValue<Vector2>();
-    }
-
-    private void Gravity_Input_Performed(InputAction.CallbackContext ctx)
-    {
-        rawGravityInput = ctx.ReadValue<Vector2>();
-    }
-
-    private void Gravity_Input_Canceled(InputAction.CallbackContext ctx)
-    {
-        rawGravityInput = Vector2.zero;
-    }
-
-    // Called when player confirms a gravity direction (e.g., pressing confirm button)
     private void Gravity_Confirm_Performed(InputAction.CallbackContext ctx)
     {
+        // Convert raw input into a world-aligned direction
         Vector2 snappedInput = GetSnappedGravityInput();
-
         if (snappedInput == Vector2.zero)
             return;
 
-        // Convert local input direction to world space and find nearest axis (e.g., Up, Right)
         Vector3 localDirection = new Vector3(snappedInput.x, 0f, snappedInput.y);
         Vector3 worldDirection = transform.TransformDirection(localDirection).normalized;
         Vector3 finalDirection = GetNearestWorldAxis(worldDirection);
 
-        // Notify any subscribers about confirmed gravity direction
+        // Notify gravity change listeners
         OnGravityConfirmed?.Invoke(finalDirection);
         OnGravityPreviewConfirmed?.Invoke();
     }
 
     private void Pause_Performed(InputAction.CallbackContext ctx)
     {
-        // Toggles pause state only if in valid states
+        // Toggle pause/unpause if allowed
         if (GameManager.CurrentState == GameState.Playing || GameManager.CurrentState == GameState.Paused)
         {
             GameManager.Instance.TogglePause();
@@ -159,11 +142,10 @@ public class InputManager : MonoBehaviour
 
     private void HandleGameStateChanged(GameState state)
     {
-        // Prevents input handling when the game is not actively playing
+        // Disable input if game is not in play state
         inputBlocked = state != GameState.Playing;
     }
 
-    // Called from an external MonoBehaviour (e.g., PlayerManager) every frame
     public void HandleAllInput()
     {
         if (inputBlocked)
@@ -175,7 +157,7 @@ public class InputManager : MonoBehaviour
         HandleGravityPreviewInput();
     }
 
-    // These are public getters, often used by external systems (camera, movement)
+    // Public accessors
     public float GetVerticalInput() => verticalInput;
     public float GetHorizontalInput() => horizontalInput;
     public float GetCameraInputX() => cameraInputX;
@@ -183,9 +165,11 @@ public class InputManager : MonoBehaviour
     public float GetMoveAmount() => moveAmount;
     public Vector2 GetGravityInput() => GetSnappedGravityInput();
 
-    // Processes current frame's movement input and sends movement data to animator
     private void HandleMovementInput()
     {
+        if (GameManager.CurrentState != GameState.Playing)
+            return;
+
         verticalInput = movementInput.y;
         horizontalInput = movementInput.x;
 
@@ -194,18 +178,15 @@ public class InputManager : MonoBehaviour
 
         moveAmount = Mathf.Clamp01(Mathf.Abs(horizontalInput) + Mathf.Abs(verticalInput));
 
-        // Update animator with movement magnitude and sprinting state
         animatorManager.UpdateAnimatorValues(0, moveAmount, playerLocomotion.GetIsSprinting());
     }
 
-    // Enables sprinting based on input and movement strength
     private void HandleSprintingInput()
     {
         bool shouldSprint = sprintInput && moveAmount > 0.5f;
         playerLocomotion.SetIsSprinting(shouldSprint);
     }
 
-    // Triggers the jump logic once per press
     private void HandleJumpingInput()
     {
         if (jumpInput)
@@ -215,7 +196,6 @@ public class InputManager : MonoBehaviour
         }
     }
 
-    // Continuously processes gravity direction preview input
     private void HandleGravityPreviewInput()
     {
         Vector2 snappedInput = GetSnappedGravityInput();
@@ -226,19 +206,18 @@ public class InputManager : MonoBehaviour
             Vector3 worldDirection = transform.TransformDirection(localDirection).normalized;
             Vector3 previewDirection = GetNearestWorldAxis(worldDirection);
 
-            // Only invoke if the direction actually changed from the last preview
+            // Only send event if direction actually changed
             if (previewDirection != lastPreviewDirection)
             {
                 lastPreviewDirection = previewDirection;
                 OnGravityPreviewed?.Invoke(previewDirection);
             }
 
-            // Helpful visual debug line in Scene view
             Debug.DrawRay(transform.position, previewDirection * 2f, Color.cyan);
         }
         else
         {
-            // If there was a previous preview direction, clear it and notify listeners
+            // Cancel preview if input is cleared
             if (lastPreviewDirection != Vector3.zero)
             {
                 lastPreviewDirection = Vector3.zero;
@@ -247,7 +226,7 @@ public class InputManager : MonoBehaviour
         }
     }
 
-    // Processes directional gravity input and snaps it to a single axis (left, right, up, down)
+    // Converts raw input to one of four cardinal directions (snap)
     private Vector2 GetSnappedGravityInput()
     {
         float inputX = rawGravityInput.x;
@@ -257,23 +236,14 @@ public class InputManager : MonoBehaviour
         bool hasVerticalInput = Mathf.Abs(inputY) > 0f;
 
         if (isHorizontalDominant)
-        {
-            // Snap gravity to horizontal axis (left/right)
             return new Vector2(Mathf.Sign(inputX), 0f);
-        }
         else if (hasVerticalInput)
-        {
-            // Snap gravity to vertical axis (forward/backward)
             return new Vector2(0f, Mathf.Sign(inputY));
-        }
         else
-        {
-            // No valid gravity direction input
             return Vector2.zero;
-        }
     }
 
-    // Given a direction vector, returns the nearest world axis (6 total possibilities)
+    // Determines closest world axis to a given direction
     private Vector3 GetNearestWorldAxis(Vector3 direction)
     {
         Vector3[] axes = {
@@ -291,7 +261,6 @@ public class InputManager : MonoBehaviour
         foreach (Vector3 axis in axes)
         {
             float alignment = Vector3.Dot(direction, axis);
-
             if (alignment > maxAlignment)
             {
                 maxAlignment = alignment;

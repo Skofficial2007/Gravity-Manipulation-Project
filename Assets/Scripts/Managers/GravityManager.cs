@@ -3,93 +3,100 @@ using UnityEngine;
 public class GravityManager : MonoBehaviour
 {
     [Header("Dependencies")]
-    //[SerializeField] private CameraManager cameraManager; // Optional: for aligning camera orientation to gravity
-    [SerializeField] private LayerMask groundLayer;           // Layer used to detect ground surfaces beneath player
+    [SerializeField] private LayerMask groundLayer;
 
     [Header("Gravity Settings")]
-    [SerializeField] private float gravityStrength = 9.81f;   // Force magnitude applied in gravity direction
+    [SerializeField] private float gravityStrength = 9.81f;
 
-    private InputManager inputManager;                        // Reference to InputManager for gravity input events
+    private InputManager inputManager;
+    private Rigidbody playerRigidbody;
 
-    // Represents the current gravity direction in world space (shared globally)
+    // Stores the current gravity direction for global access
     public static Vector3 CurrentGravity { get; private set; } = Vector3.down;
 
     private void Awake()
     {
-        // Grab InputManager from the same GameObject (assumes both components are attached)
         inputManager = GetComponent<InputManager>();
+        playerRigidbody = GetComponent<Rigidbody>();
 
-        // Reset static gravity and apply default force downward
+        // Initialize default gravity pointing down
         CurrentGravity = Vector3.down;
         Physics.gravity = CurrentGravity * gravityStrength;
 
-        // Align the player’s orientation with gravity when the scene loads
+        // Ensure player starts aligned to initial gravity
         AlignPlayerToGravity(CurrentGravity);
     }
 
     private void OnEnable()
     {
-        // Register listener for confirmed gravity direction from player input
+        // Subscribe to gravity change input
         inputManager.OnGravityConfirmed += HandleGravityChange;
     }
 
     private void OnDisable()
     {
-        // Unregister to prevent unwanted calls or memory issues
         inputManager.OnGravityConfirmed -= HandleGravityChange;
     }
 
-    // Called when the player confirms a new gravity direction
     private void HandleGravityChange(Vector3 gravityDirection)
     {
-        // Update global gravity reference
+        // Apply new gravity direction and strength
         CurrentGravity = gravityDirection;
-
-        // Set the Unity physics system's gravity to the new direction
         Physics.gravity = gravityDirection * gravityStrength;
 
-        // Reorient the player so their feet point opposite gravity
+        // Align and reposition player to match new gravity
         AlignPlayerToGravity(gravityDirection);
-
-        // Optionally snap player to the ground in the new gravity direction
         SnapPlayerToNewGround(gravityDirection);
-
-        // Align the camera to maintain upright feel (if camera system supports it)
-        //cameraManager.AlignToGravity(transform);
     }
 
-    // Rotates the player so that their 'up' aligns against gravity direction
+    // Rotates the player so their 'up' is opposite of gravity
     private void AlignPlayerToGravity(Vector3 gravityDirection)
     {
-        // Compute the rotation needed to make player's up match the opposite of gravity
-        Quaternion targetRotation = Quaternion.FromToRotation(transform.up, -gravityDirection) * transform.rotation;
-        transform.rotation = targetRotation;
+        Vector3 gravityUp = -gravityDirection.normalized;
+
+        // Project current forward onto new ground plane
+        Vector3 forward = Vector3.ProjectOnPlane(transform.forward, gravityUp).normalized;
+
+        // Use fallback if forward becomes degenerate
+        if (forward == Vector3.zero)
+            forward = Vector3.ProjectOnPlane(Vector3.forward, gravityUp);
+
+        Quaternion targetRotation = Quaternion.LookRotation(forward, gravityUp);
+
+        // Use Rigidbody's rotation when available to keep physics stable
+        if (playerRigidbody != null)
+        {
+            playerRigidbody.MoveRotation(targetRotation);
+        }
+        else
+        {
+            transform.rotation = targetRotation;
+        }
     }
 
-    // Attempts to reposition the player onto the surface aligned with new gravity
+    // Casts ray in new gravity direction and moves player to the surface
     private void SnapPlayerToNewGround(Vector3 gravityDirection)
     {
         Vector3 rayOrigin = transform.position;
         RaycastHit hit;
 
-        // Cast a ray in the gravity direction to find the nearest surface
         if (Physics.Raycast(rayOrigin, gravityDirection, out hit, 10f, groundLayer))
         {
-            // Move player just above the detected surface (small offset to avoid clipping)
+            // Offset slightly above ground to prevent embedding
             Vector3 snappedPosition = hit.point - gravityDirection.normalized * 0.5f;
             transform.position = snappedPosition;
-        }
 
-        // If no ground is found, player will fall — handled by GameManager or death logic
+            // Ensure rotation is reapplied after repositioning
+            AlignPlayerToGravity(gravityDirection);
+        }
     }
 
-    // Fully resets gravity to default downward orientation
+    // Resets to default downward gravity
     public void ResetGravityToDefault()
     {
         CurrentGravity = Vector3.down;
         Physics.gravity = CurrentGravity * gravityStrength;
 
-        // Reorient and reposition player to match default gravity
         AlignPlayerToGravity(CurrentGravity);
         SnapPlayerToNewGround(CurrentGravity);
     }

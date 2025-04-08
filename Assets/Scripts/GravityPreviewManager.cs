@@ -3,16 +3,16 @@ using UnityEngine;
 public class GravityPreviewManager : MonoBehaviour
 {
     [Header("Dependencies")]
-    [SerializeField] private InputManager input;                   // Reference to the input system for gravity events
-    [SerializeField] private Transform playerTransform;            // Player's transform to calculate hologram orientation
-    [SerializeField] private GameObject currentHologram;           // The visual preview object shown during gravity selection
+    [SerializeField] private InputManager input;                   // Input system reference for gravity preview events
+    [SerializeField] private Transform playerTransform;            // Used to determine hologram's position and orientation
+    [SerializeField] private GameObject currentHologram;           // The visual hologram shown during gravity preview
 
     [Header("Settings")]
-    [SerializeField] private float gravityOffsetDistance = 3.5f;   // How far from the player the hologram is placed (in gravity direction)
-    [SerializeField] private float liftOffset = 2f;                // How far to lift the hologram above the ground (along current up)
+    [SerializeField] private float gravityOffsetDistance = 3.5f;   // How far the hologram appears from the player
+    [SerializeField] private float liftOffset = 2f;                // How far the hologram is lifted up relative to current gravity
 
-    private Quaternion previewRotation;                            // Cached rotation used when confirming gravity direction
-    private Vector3 previewGravityDirection;                       // Cached direction used to place and rotate the hologram
+    private Quaternion previewRotation;                            // Stores the rotation the hologram should have
+    private Vector3 previewGravityDirection;                       // Direction currently being previewed
 
     private void OnEnable()
     {
@@ -22,7 +22,7 @@ public class GravityPreviewManager : MonoBehaviour
             return;
         }
 
-        // Subscribe to gravity-related preview events from input system
+        // Subscribe to gravity preview events from InputManager
         input.OnGravityPreviewed += ShowPreview;
         input.OnGravityPreviewCanceled += HidePreview;
         input.OnGravityPreviewConfirmed += ApplyHologramRotation;
@@ -30,15 +30,15 @@ public class GravityPreviewManager : MonoBehaviour
 
     private void OnDisable()
     {
-        // Unsubscribe to avoid memory leaks or dangling references
         if (input == null) return;
 
+        // Unsubscribe to prevent memory leaks or stale listeners
         input.OnGravityPreviewed -= ShowPreview;
         input.OnGravityPreviewCanceled -= HidePreview;
         input.OnGravityPreviewConfirmed -= ApplyHologramRotation;
     }
 
-    // Called when a gravity direction is being hovered (previewed) by the player
+    // Displays and orients the hologram based on previewed gravity direction
     private void ShowPreview(Vector3 gravityDirection)
     {
         if (playerTransform == null || currentHologram == null)
@@ -46,45 +46,43 @@ public class GravityPreviewManager : MonoBehaviour
 
         previewGravityDirection = gravityDirection;
 
-        // Determine the new "up" based on opposite of gravity
+        // "Up" direction is opposite gravity
         Vector3 gravityUp = -gravityDirection.normalized;
 
-        // Project current forward vector onto the new up plane to avoid odd angles
-        Vector3 playerForward = Vector3.ProjectOnPlane(playerTransform.forward, gravityUp).normalized;
+        // Use camera forward projected onto the gravity plane for orientation
+        Vector3 cameraForward = Camera.main.transform.forward;
+        Vector3 projectedForward = Vector3.ProjectOnPlane(cameraForward, gravityUp).normalized;
 
-        // Fallback to original forward if projection fails (e.g., perfectly aligned)
-        if (playerForward == Vector3.zero)
-            playerForward = playerTransform.forward;
+        // Fallback in case of projection failure
+        if (projectedForward == Vector3.zero)
+            projectedForward = Vector3.ProjectOnPlane(Vector3.forward, gravityUp);
 
-        // Build rotation facing forward, aligned to new up
-        previewRotation = Quaternion.LookRotation(playerForward, gravityUp);
+        // Determine the rotation for the hologram
+        previewRotation = Quaternion.LookRotation(projectedForward, gravityUp);
 
-        // Position hologram ahead in gravity direction, offset by lift to avoid clipping
+        // Calculate position based on gravity direction and lift offset
         Vector3 basePosition = playerTransform.position + gravityDirection.normalized * gravityOffsetDistance;
         Vector3 liftedPosition = basePosition + (-GravityManager.CurrentGravity.normalized * liftOffset);
 
+        // Set the hologram's position and orientation
         currentHologram.transform.SetPositionAndRotation(liftedPosition, previewRotation);
 
-        // Enable the hologram if it's currently disabled
+        // Ensure the hologram is visible
         if (!currentHologram.activeSelf)
             currentHologram.SetActive(true);
     }
 
-    // Called when preview input is released or canceled
+    // Hides the hologram if preview is canceled or cleared
     private void HidePreview()
     {
         if (currentHologram != null)
             currentHologram.SetActive(false);
     }
 
-    // Called when player confirms gravity direction
-    // Applies the preview rotation to the actual player
+    // Called when player confirms a gravity shift
+    // Rotation of player is now handled by GravityManager, so we just hide the preview
     private void ApplyHologramRotation()
     {
-        if (currentHologram != null && playerTransform != null)
-        {
-            playerTransform.rotation = previewRotation;
-            HidePreview();
-        }
+        HidePreview();
     }
 }

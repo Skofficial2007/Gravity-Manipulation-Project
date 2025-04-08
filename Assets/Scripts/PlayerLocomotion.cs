@@ -3,30 +3,30 @@ using UnityEngine;
 
 public class PlayerLocomotion : MonoBehaviour
 {
-    // Event to notify when the player falls for too long (e.g. falls off the map)
+    // Event triggered when the player falls for a significant amount of time
     public static event Action OnPlayerFell;
 
-    // Component references
+    // References to required components
     private PlayerManager playerManager;
     private InputManager inputManager;
     private AnimatorManager animatorManager;
     private Transform cameraObject;
     private Rigidbody playerRigidbody;
 
-    // Direction to move the player
+    // Direction the player should move in
     private Vector3 moveDirection;
 
-    // Input values
+    // Cached input values
     private float verticalInput;
     private float horizontalInput;
 
     [Header("Falling Settings")]
-    [SerializeField] private float inAirTimer = 0f;
-    [SerializeField] private float leapingVelocity = 2f;
-    [SerializeField] private float fallingVelocity = 30f;
-    [SerializeField] private float rayCastHeightOffset = 0.5f;
-    [SerializeField] private LayerMask groundLayer;
-    [SerializeField] private float fallThresholdTime = 2f;
+    [SerializeField] private float inAirTimer = 0f; // Tracks how long the player has been falling
+    [SerializeField] private float leapingVelocity = 2f; // Forward force while in air
+    [SerializeField] private float fallingVelocity = 30f; // Gravity multiplier during fall
+    [SerializeField] private float rayCastHeightOffset = 0.5f; // Distance above feet to cast for ground
+    [SerializeField] private LayerMask groundLayer; // Layer used to detect ground
+    [SerializeField] private float fallThresholdTime = 2f; // Time before fall is considered significant
 
     [Header("Movement Flags")]
     [SerializeField] private bool isSprinting;
@@ -43,12 +43,11 @@ public class PlayerLocomotion : MonoBehaviour
     [SerializeField] private float jumpHeight = 2f;
     [SerializeField] private float gravityIntensity = -9f;
 
-    // Prevent triggering the fall event multiple times
-    private bool hasTriggeredFallEvent = false;
+    private bool hasTriggeredFallEvent = false; // Prevents repeated event calls
 
     private void Awake()
     {
-        // Cache component references on awake
+        // Cache references to other components
         playerManager = GetComponent<PlayerManager>();
         inputManager = GetComponent<InputManager>();
         animatorManager = GetComponentInChildren<AnimatorManager>();
@@ -56,110 +55,111 @@ public class PlayerLocomotion : MonoBehaviour
         cameraObject = Camera.main.transform;
     }
 
-    // Accessors for state flags
+    // Public getters and setters for key flags
     public bool GetIsSprinting() => isSprinting;
     public void SetIsSprinting(bool val) => isSprinting = val;
     public bool GetIsJumping() => isJumping;
     public void SetIsJumping(bool val) => isJumping = val;
     public bool GetIsGrounded() => isGrounded;
 
+    // Main method to be called every frame for movement handling
     public void HandleAllMovement()
     {
-        // Stop all movement when game is not playing
+        // Do nothing if game isn't in play mode
         if (GameManager.CurrentState != GameState.Playing)
         {
             playerRigidbody.linearVelocity = Vector3.zero;
             return;
         }
 
-        // Handle falling first to update grounded state
+        // Check for fall and land transitions
         HandleFallingAndLanding();
 
-        // Skip movement if in animation interaction
+        // Don't move if performing other interactions
         if (playerManager.GetIsInteracting()) return;
 
-        // Get player input
+        // Get fresh input
         verticalInput = inputManager.GetVerticalInput();
         horizontalInput = inputManager.GetHorizontalInput();
 
-        // Move and rotate based on input
+        // Apply movement and rotation
         HandleMovement();
         HandleRotation();
     }
 
+    // Handles grounded movement logic
     private void HandleMovement()
     {
-        // Do not move while in the middle of a jump
-        if (isJumping) return;
+        if (isJumping || playerManager.GetIsInteracting()) return;
 
+        // Use camera orientation relative to gravity for movement direction
         Vector3 gravityDir = Physics.gravity.normalized;
-
-        // Camera-relative movement directions
         Vector3 camForward = Vector3.ProjectOnPlane(cameraObject.forward, gravityDir).normalized;
         Vector3 camRight = Vector3.ProjectOnPlane(cameraObject.right, gravityDir).normalized;
 
         moveDirection = camForward * verticalInput + camRight * horizontalInput;
         moveDirection.Normalize();
 
-        // Determine speed based on input magnitude and sprinting state
+        // Choose speed based on input and sprint flag
         float speed = isSprinting ? sprintingSpeed :
                      (inputManager.GetMoveAmount() >= 0.5f ? runningSpeed : walkingSpeed);
 
         moveDirection *= speed;
 
-        // Apply movement only if grounded and not jumping
+        // Apply movement only if grounded
         if (isGrounded && !isJumping)
         {
             playerRigidbody.linearVelocity = moveDirection;
         }
     }
 
+    // Handles rotating the player to match movement direction
     private void HandleRotation()
     {
-        // Do not rotate during a jump
-        if (isJumping) return;
+        if (isJumping || playerManager.GetIsInteracting()) return;
 
         Vector3 gravityDir = Physics.gravity.normalized;
-
-        // Get input direction relative to camera
         Vector3 camForward = Vector3.ProjectOnPlane(cameraObject.forward, gravityDir).normalized;
         Vector3 camRight = Vector3.ProjectOnPlane(cameraObject.right, gravityDir).normalized;
 
         Vector3 targetDirection = camForward * verticalInput + camRight * horizontalInput;
         targetDirection.Normalize();
 
-        // Maintain current facing if no input
         if (targetDirection == Vector3.zero)
-            targetDirection = transform.forward;
+            return;
 
-        // Smoothly rotate towards movement direction
+        // Rotate the player to face the direction of movement
         Quaternion targetRotation = Quaternion.LookRotation(targetDirection, -gravityDir);
         Quaternion smoothRotation = Quaternion.Slerp(transform.rotation, targetRotation, rotationSpeed * Time.deltaTime);
 
         if (isGrounded && !isJumping)
         {
-            transform.rotation = smoothRotation;
+            playerRigidbody.MoveRotation(smoothRotation);
         }
     }
 
+    // Handles the logic for falling and landing
     private void HandleFallingAndLanding()
     {
         Vector3 gravityDir = Physics.gravity.normalized;
         Vector3 rayOrigin = transform.position - gravityDir * rayCastHeightOffset;
 
-        // If in the air and not jumping, play falling behavior
+        // If airborne and not jumping, play falling animation and apply forces
         if (!isGrounded && !isJumping)
         {
             if (!playerManager.GetIsInteracting())
+            {
                 animatorManager.PlayTargetAnimations("Falling", true);
+                playerManager.SetIsInteracting(true);
+            }
 
             inAirTimer += Time.deltaTime;
 
-            // Add forward momentum and downward force
+            // Apply forward momentum and increased falling force
             playerRigidbody.AddForce(transform.forward * leapingVelocity);
             playerRigidbody.AddForce(gravityDir * fallingVelocity * inAirTimer);
 
-            // Trigger fall event if in air too long
+            // If falling for long enough, trigger the fall event
             if (inAirTimer > fallThresholdTime && !hasTriggeredFallEvent)
             {
                 hasTriggeredFallEvent = true;
@@ -167,13 +167,13 @@ public class PlayerLocomotion : MonoBehaviour
             }
         }
 
-        // Use sphere cast to detect ground below
+        // Cast a sphere downwards to check for ground
         float maxDistance = 0.5f;
         float sphereRadius = 0.2f;
 
         if (Physics.SphereCast(rayOrigin, sphereRadius, gravityDir, out RaycastHit hit, maxDistance, groundLayer))
         {
-            // If landing after interaction, play landing animation
+            // If landing from a fall, play landing animation
             if (!isGrounded && playerManager.GetIsInteracting())
             {
                 animatorManager.PlayTargetAnimations("Landing", true);
@@ -182,7 +182,6 @@ public class PlayerLocomotion : MonoBehaviour
             isGrounded = true;
             inAirTimer = 0f;
             hasTriggeredFallEvent = false;
-            playerManager.SetIsInteracting(false);
         }
         else
         {
@@ -190,21 +189,25 @@ public class PlayerLocomotion : MonoBehaviour
         }
     }
 
+    // Handles jumping logic
     public void HandleJumping()
     {
-        // Only jump if grounded
-        if (!isGrounded) return;
+        // Prevent jumping if in air or mid-action
+        if (!isGrounded || playerManager.GetIsInteracting()) return;
 
-        // Play jump animation
+        // Trigger jump animation
         animatorManager.animator.SetBool("isJumping", true);
         animatorManager.PlayTargetAnimations("Jump", false);
 
-        // Calculate initial jump velocity using physics formula
+        // Calculate upward jump force
         float jumpVelocity = Mathf.Sqrt(-2 * gravityIntensity * jumpHeight);
         Vector3 jumpForce = -Physics.gravity.normalized * jumpVelocity;
 
-        // Apply jump along with current movement direction
-        Vector3 finalVelocity = moveDirection + jumpForce;
+        // Add a forward boost and combine with jump force
+        Vector3 forwardBoost = moveDirection.normalized * leapingVelocity;
+        Vector3 finalVelocity = forwardBoost + jumpForce;
+
+        // Apply the final velocity to the rigidbody
         playerRigidbody.linearVelocity = finalVelocity;
     }
 }

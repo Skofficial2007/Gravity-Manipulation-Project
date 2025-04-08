@@ -2,54 +2,67 @@ using UnityEngine;
 
 public class PlayerManager : MonoBehaviour
 {
-    //[SerializeField] private CameraManager cameraManager; // Optional camera system (disabled)
+    private Animator animator;
+    private InputManager inputManager;
+    private PlayerLocomotion playerLocomotion;
 
-    private Animator animator;                       // Handles character animations (jumping, interacting, etc.)
-    private InputManager inputManager;               // Processes input from player controls
-    private PlayerLocomotion playerLocomotion;       // Controls movement and physics behavior
-
-    private bool isInteracting;                      // Tracks whether the player is in an interaction animation
+    // Tracks whether the player is currently in an animation that locks movement
+    private bool isInteracting;
 
     private void Awake()
     {
-        // Cache component references from this GameObject or children
+        // Cache required component references
         animator = GetComponentInChildren<Animator>();
         inputManager = GetComponent<InputManager>();
         playerLocomotion = GetComponent<PlayerLocomotion>();
     }
 
+    private void Start()
+    {
+        // Rotate the player to face the camera's forward direction at the beginning
+        InitializeDefaultForward();
+    }
+
     private void Update()
     {
+        // Handle all input per frame (movement, gravity, jumping)
         inputManager.HandleAllInput();
     }
 
     private void FixedUpdate()
     {
-        // Ensures smoother and more stable movement using Rigidbody
+        // Perform physics-based movement logic
         playerLocomotion.HandleAllMovement();
     }
 
     private void LateUpdate()
     {
-        // Ensures camera updates happen after player has moved
-        // cameraManager.HandleAllCameraMovement(); // Optional external camera handler
+        // Sync internal state from Animator after movement and input
 
-        // Reads the "isInteracting" flag from Animator
-        // Used to block movement during animations
+        // Used to prevent movement or input during certain animations (e.g. landing)
         isInteracting = animator.GetBool("isInteracting");
 
-        // Keeps the locomotion logic aware of jumping animation state
-        // Allows logic to detect when the jump ends and apply landing
+        // Notify locomotion when jump animation is active
         playerLocomotion.SetIsJumping(animator.GetBool("isJumping"));
 
-        // Keeps Animator grounded state in sync with actual physics grounding
-        // Typically drives grounded/airborne blend trees
+        // Keep animator grounded state in sync with actual ground detection
         animator.SetBool("isGrounded", playerLocomotion.GetIsGrounded());
     }
 
-    // Returns whether the character is currently interacting (e.g., can't move)
+    // Expose interaction flag to other systems (like locomotion)
     public bool GetIsInteracting() => isInteracting;
 
-    // Allows external scripts (like animation events) to change interaction state
+    // Allow external scripts or animation events to set interaction flag
     public void SetIsInteracting(bool val) => isInteracting = val;
+
+    // Aligns player facing direction to camera forward (on horizontal plane)
+    private void InitializeDefaultForward()
+    {
+        Vector3 camForward = Vector3.ProjectOnPlane(Camera.main.transform.forward, Vector3.up).normalized;
+
+        if (camForward != Vector3.zero)
+        {
+            transform.forward = camForward;
+        }
+    }
 }
